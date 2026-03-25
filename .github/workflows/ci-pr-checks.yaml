@@ -137,11 +137,11 @@ jobs:
       - name: Install dependencies
         run: go mod download
 
-      - name: Install golangci-lint
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.8.0
-          args: ""
+          args: --timeout=5m
 
       - name: Run make build
         shell: bash

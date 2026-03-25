@@ -23,7 +23,8 @@ func NewModelAnalyzer(system *inferno.System) *ModelAnalyzer {
 
 // Analyze a particular variant and generate corresponding allocations that achieve SLOs for all accelerators, used by the optimizer
 func (ma *ModelAnalyzer) AnalyzeModel(ctx context.Context,
-	va llmdOptv1alpha1.VariantAutoscaling) *interfaces.ModelAnalyzeResponse {
+	va llmdOptv1alpha1.VariantAutoscaling,
+) *interfaces.ModelAnalyzeResponse {
 
 	serverName := utils.FullName(va.Name, va.Namespace)
 	if server, exists := ma.system.Servers()[serverName]; exists {
