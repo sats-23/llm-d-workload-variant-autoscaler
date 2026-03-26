@@ -251,6 +251,9 @@ var _ = BeforeSuite(func() {
 		}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
 	}
 
+	By("Cleaning up any leftover resources from previous test runs")
+	cleanupTestResources(ctx, k8sClient, crClient, cfg.LLMDNamespace)
+
 	GinkgoWriter.Println("BeforeSuite completed successfully - infrastructure ready")
 })
 
@@ -334,16 +337,11 @@ func deleteKindClusterDirectly(clusterName string) {
 func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, crClient client.Client, namespace string) {
 	GinkgoWriter.Println("Cleaning up test resources...")
 
-	// Helper function to check if resource name matches test patterns
-	isTestResource := func(name string) bool {
-		return strings.HasPrefix(name, "test-") || strings.HasPrefix(name, "smoke-") || strings.HasPrefix(name, "saturation-") || strings.HasPrefix(name, "error-test-") || strings.HasPrefix(name, "target-condition-") || strings.HasPrefix(name, "scale-from-zero-")
-	}
-
 	// List and delete test VAs
 	vaList := &variantautoscalingv1alpha1.VariantAutoscalingList{}
 	if err := crClient.List(ctx, vaList, client.InNamespace(namespace)); err == nil {
 		for _, va := range vaList.Items {
-			if isTestResource(va.Name) {
+			if utils.IsTestResource(va.Name) {
 				GinkgoWriter.Printf("Cleaning up leftover VA: %s\n", va.Name)
 				deleteResourceWithVerification(ctx, func() error {
 					return crClient.Delete(ctx, &va)
@@ -359,7 +357,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
 	if err == nil {
 		for _, hpa := range hpaList.Items {
-			if isTestResource(hpa.Name) {
+			if utils.IsTestResource(hpa.Name) {
 				GinkgoWriter.Printf("Cleaning up leftover HPA: %s\n", hpa.Name)
 				deleteResourceWithVerification(ctx, func() error {
 					return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
@@ -396,7 +394,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 	deployList, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
 	if err == nil {
 		for _, deploy := range deployList.Items {
-			if isTestResource(deploy.Name) {
+			if utils.IsTestResource(deploy.Name) {
 				GinkgoWriter.Printf("Cleaning up leftover Deployment: %s\n", deploy.Name)
 				deleteResourceWithVerification(ctx, func() error {
 					return k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
@@ -428,7 +426,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 	jobList, err := k8sClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
 	if err == nil {
 		for _, job := range jobList.Items {
-			if isTestResource(job.Name) {
+			if utils.IsTestResource(job.Name) {
 				GinkgoWriter.Printf("Cleaning up leftover Job: %s\n", job.Name)
 				propagation := metav1.DeletePropagationBackground
 				deleteResourceWithVerification(ctx, func() error {
@@ -447,7 +445,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 	svcList, err := k8sClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
 	if err == nil {
 		for _, svc := range svcList.Items {
-			if isTestResource(svc.Name) {
+			if utils.IsTestResource(svc.Name) {
 				GinkgoWriter.Printf("Cleaning up leftover Service: %s\n", svc.Name)
 				deleteResourceWithVerification(ctx, func() error {
 					return k8sClient.CoreV1().Services(namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
@@ -466,7 +464,7 @@ func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, 
 		if err := crClient.List(ctx, smList, client.InNamespace(monitoringNS)); err == nil {
 			for _, sm := range smList.Items {
 				smName := sm.Name
-				if isTestResource(smName) {
+				if utils.IsTestResource(smName) {
 					GinkgoWriter.Printf("Cleaning up leftover ServiceMonitor: %s\n", smName)
 					deleteResourceWithVerification(ctx, func() error {
 						return crClient.Delete(ctx, &promoperator.ServiceMonitor{

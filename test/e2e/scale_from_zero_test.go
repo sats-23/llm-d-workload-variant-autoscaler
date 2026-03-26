@@ -21,6 +21,7 @@ import (
 
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
 // cleanupScaleFromZeroResources deletes all resources created by scale-from-zero tests to ensure clean state
@@ -145,13 +146,24 @@ func cleanupScaleFromZeroResources() {
 // so the test uses a KEDA ScaledObject (which supports minReplicas=0) instead of a native HPA.
 var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func() {
 	var (
-		poolName         = "scale-from-zero-pool"
-		modelServiceName = "scale-from-zero-ms"
-		vaName           = "scale-from-zero-va"
-		hpaName          = "scale-from-zero-hpa"
+		names            utils.TestResourceNames
+		poolName         string
+		modelServiceName string
+		vaName           string
+		hpaName          string
 	)
 
 	BeforeAll(func() {
+		// Generate unique resource names for this test
+		names = utils.NewTestResourceNames("scale-from-zero", "startup")
+		poolName = names.Pool
+		modelServiceName = names.Base
+		vaName = names.VA
+		hpaName = names.HPA
+
+		GinkgoWriter.Printf("Using unique resource names: pool=%s, model=%s, va=%s, hpa=%s\n",
+			poolName, modelServiceName, vaName, hpaName)
+
 		// Scale-from-zero requires GIE flow control and an InferenceObjective.
 		// On platforms where HPA rejects minReplicas=0 (e.g. OpenShift without
 		// HPAScaleToZero feature gate), SCALER_BACKEND=keda must be set so the
@@ -219,7 +231,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 
 		By("Creating model service deployment with 0 initial replicas")
 		// Create deployment with 0 replicas using the fixture
-		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+		err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		// Immediately scale deployment to 0 (with retry to handle race conditions)
@@ -233,30 +245,12 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalQuickSec)*time.Second).Should(Succeed(), "Should successfully scale deployment to 0 replicas")
 
 		By("Creating service to expose model server")
-		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, modelServiceName+"-decode", 8000)
+		err = fixtures.CreateService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, modelServiceName+"-decode", 8000)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create service")
 
 		By("Creating ServiceMonitor for metrics scraping")
-		err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceName, modelServiceName+"-decode")
+		err = fixtures.CreateServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceName, modelServiceName+"-decode")
 		Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceMonitor")
-
-		// Register cleanup for ServiceMonitor
-		DeferCleanup(func() {
-			serviceMonitorName := modelServiceName + "-monitor"
-			cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
-				func() error {
-					return crClient.Delete(ctx, &promoperator.ServiceMonitor{
-						ObjectMeta: metav1.ObjectMeta{
-							Name:      serviceMonitorName,
-							Namespace: cfg.MonitoringNS,
-						},
-					})
-				},
-				func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
-					return errors.IsNotFound(err)
-				})
-		})
 
 		By("Verifying deployment is at 0 replicas")
 		Eventually(func(g Gomega) {
@@ -266,7 +260,7 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 		}, 1*time.Minute, 5*time.Second).Should(Succeed())
 
 		By("Creating VariantAutoscaling resource with minReplicas=0 to allow scale-from-zero")
-		err = fixtures.EnsureVariantAutoscaling(
+		err = fixtures.CreateVariantAutoscaling(
 			ctx, crClient, cfg.LLMDNamespace, vaName,
 			modelServiceName+"-decode", cfg.ModelID, cfg.AcceleratorType, 30.0,
 			cfg.ControllerInstance,
@@ -276,11 +270,10 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 
 		By("Creating scaler with minReplicas=0 (HPA or ScaledObject per backend)")
 		if cfg.ScalerBackend == scalerBackendKeda {
-			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
-			err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10, cfg.MonitoringNS)
+			err = fixtures.CreateScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10, cfg.MonitoringNS)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject with scale-to-zero")
 		} else {
-			err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10)
+			err = fixtures.CreateHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, modelServiceName+"-decode", vaName, 0, 10)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create HPA with scale-to-zero")
 		}
 
@@ -303,28 +296,80 @@ var _ = Describe("Scale-From-Zero Feature", Serial, Label("full"), Ordered, func
 	AfterAll(func() {
 		By("Cleaning up scale-from-zero test resources")
 
+		// Delete ServiceMonitor
+		serviceMonitorName := modelServiceName + "-monitor"
+		cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
+			func() error {
+				return crClient.Delete(ctx, &promoperator.ServiceMonitor{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      serviceMonitorName,
+						Namespace: cfg.MonitoringNS,
+					},
+				})
+			},
+			func() bool {
+				err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
+				return errors.IsNotFound(err)
+			})
+
 		// Delete scaler (HPA or ScaledObject)
 		if cfg.ScalerBackend == scalerBackendKeda {
-			_ = fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
+			cleanupResource(ctx, "ScaledObject", cfg.LLMDNamespace, hpaName+"-so",
+				func() error {
+					return fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
+				},
+				func() bool {
+					so := &unstructured.Unstructured{}
+					so.SetAPIVersion("keda.sh/v1alpha1")
+					so.SetKind("ScaledObject")
+					err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: hpaName + "-so"}, so)
+					return errors.IsNotFound(err)
+				})
 		} else {
-			_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
+			cleanupResource(ctx, "HPA", cfg.LLMDNamespace, hpaName+"-hpa",
+				func() error {
+					return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
+				},
+				func() bool {
+					_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Get(ctx, hpaName+"-hpa", metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				})
 		}
 
 		// Delete VA
-		va := &variantautoscalingv1alpha1.VariantAutoscaling{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      vaName,
-				Namespace: cfg.LLMDNamespace,
+		cleanupResource(ctx, "VariantAutoscaling", cfg.LLMDNamespace, vaName,
+			func() error {
+				return crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      vaName,
+						Namespace: cfg.LLMDNamespace,
+					},
+				})
 			},
-		}
-		_ = crClient.Delete(ctx, va)
+			func() bool {
+				err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, &variantautoscalingv1alpha1.VariantAutoscaling{})
+				return errors.IsNotFound(err)
+			})
 
 		// Delete service
-		_ = k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, modelServiceName+"-service", metav1.DeleteOptions{})
+		cleanupResource(ctx, "Service", cfg.LLMDNamespace, modelServiceName+"-service",
+			func() error {
+				return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, modelServiceName+"-service", metav1.DeleteOptions{})
+			},
+			func() bool {
+				_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, modelServiceName+"-service", metav1.GetOptions{})
+				return errors.IsNotFound(err)
+			})
 
 		// Delete deployment
-		_ = k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelServiceName+"-decode", metav1.DeleteOptions{})
-
+		cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, modelServiceName+"-decode",
+			func() error {
+				return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, modelServiceName+"-decode", metav1.DeleteOptions{})
+			},
+			func() bool {
+				_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, modelServiceName+"-decode", metav1.GetOptions{})
+				return errors.IsNotFound(err)
+			})
 	})
 
 	Context("Initial state verification", func() {

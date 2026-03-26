@@ -18,6 +18,7 @@ import (
 	variantautoscalingv1alpha1 "github.com/llm-d/llm-d-workload-variant-autoscaler/api/v1alpha1"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/constants"
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/e2e/fixtures"
+	"github.com/llm-d/llm-d-workload-variant-autoscaler/test/utils"
 )
 
 // cleanupSmokeTestResources deletes all resources created by smoke tests to ensure clean state
@@ -205,72 +206,51 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 	Context("Basic VA lifecycle", Serial, Ordered, func() {
 		var (
-			poolName         = "smoke-test-pool"
-			modelServiceName = "smoke-test-ms"
-			deploymentName   = modelServiceName + "-decode"
-			vaName           = "smoke-test-va"
-			hpaName          = "smoke-test-hpa"
+			names            utils.TestResourceNames
+			poolName         string
+			modelServiceName string
+			deploymentName   string
+			vaName           string
+			hpaName          string
 			minReplicas      = int32(1) // Store minReplicas for stabilization check
 		)
 
 		BeforeAll(func() {
-			By("Cleaning up any existing smoke test resources")
-			cleanupSmokeTestResources()
+			// Generate unique resource names for this test
+			names = utils.NewTestResourceNames("smoke", "basic")
+			poolName = names.Pool
+			modelServiceName = names.Base
+			deploymentName = names.Deployment
+			vaName = names.VA
+			hpaName = names.HPA
+
+			GinkgoWriter.Printf("Using unique resource names: pool=%s, model=%s, va=%s, hpa=%s\n",
+				poolName, modelServiceName, vaName, hpaName)
+
+			// Note: InferencePool should already exist from infra-only deployment
+			// We no longer create InferencePools in individual tests
+
+			By("Deleting all existing VariantAutoscaling objects for clean test state")
+			deletedCount, vaCleanupErr := utils.DeleteAllVariantAutoscalings(ctx, crClient, cfg.LLMDNamespace)
+			if vaCleanupErr != nil {
+				GinkgoWriter.Printf("Warning: Failed to clean up existing VAs: %v\n", vaCleanupErr)
+			} else if deletedCount > 0 {
+				GinkgoWriter.Printf("Deleted %d existing VariantAutoscaling objects\n", deletedCount)
+			} else {
+				GinkgoWriter.Println("No existing VariantAutoscaling objects found")
+			}
 
 			By("Creating model service deployment")
-			err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+			err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
-			// Register cleanup for deployment (runs even if test fails)
-			DeferCleanup(func() {
-				cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentName,
-					func() error {
-						return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentName, metav1.DeleteOptions{})
-					},
-					func() bool {
-						_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
-						return errors.IsNotFound(err)
-					})
-			})
-
 			By("Creating service to expose model server")
-			err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, deploymentName, 8000)
+			err = fixtures.CreateService(ctx, k8sClient, cfg.LLMDNamespace, modelServiceName, deploymentName, 8000)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create service")
 
-			// Register cleanup for service
-			DeferCleanup(func() {
-				serviceName := modelServiceName + "-service"
-				cleanupResource(ctx, "Service", cfg.LLMDNamespace, serviceName,
-					func() error {
-						return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
-					},
-					func() bool {
-						_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, serviceName, metav1.GetOptions{})
-						return errors.IsNotFound(err)
-					})
-			})
-
 			By("Creating ServiceMonitor for metrics scraping")
-			err = fixtures.EnsureServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceName, deploymentName)
+			err = fixtures.CreateServiceMonitor(ctx, crClient, cfg.MonitoringNS, cfg.LLMDNamespace, modelServiceName, deploymentName)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ServiceMonitor")
-
-			// Register cleanup for ServiceMonitor
-			DeferCleanup(func() {
-				serviceMonitorName := modelServiceName + "-monitor"
-				cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
-					func() error {
-						return crClient.Delete(ctx, &promoperator.ServiceMonitor{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:      serviceMonitorName,
-								Namespace: cfg.MonitoringNS,
-							},
-						})
-					},
-					func() bool {
-						err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
-						return errors.IsNotFound(err)
-					})
-			})
 
 			By("Waiting for model service to be ready")
 			Eventually(func(g Gomega) {
@@ -280,7 +260,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 			By("Creating VariantAutoscaling resource")
-			err = fixtures.EnsureVariantAutoscalingWithDefaults(
+			err = fixtures.CreateVariantAutoscalingWithDefaults(
 				ctx, crClient, cfg.LLMDNamespace, vaName,
 				deploymentName, cfg.ModelID, cfg.AcceleratorType,
 				cfg.ControllerInstance,
@@ -292,23 +272,48 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 				minReplicas = 0
 			}
 			if cfg.ScalerBackend == scalerBackendKeda {
-				_ = k8sClient.AutoscalingV2().HorizontalPodAutoscalers(cfg.LLMDNamespace).Delete(ctx, hpaName+"-hpa", metav1.DeleteOptions{})
-				err = fixtures.EnsureScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10, cfg.MonitoringNS)
+				err = fixtures.CreateScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10, cfg.MonitoringNS)
 				Expect(err).NotTo(HaveOccurred(), "Failed to create ScaledObject")
 			} else {
-				err = fixtures.EnsureHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10)
+				err = fixtures.CreateHPA(ctx, k8sClient, cfg.LLMDNamespace, hpaName, deploymentName, vaName, minReplicas, 10)
 				Expect(err).NotTo(HaveOccurred(), "Failed to create HPA")
 			}
 		})
 
 		AfterAll(func() {
 			By("Cleaning up test resources")
-			// Delete in reverse dependency order: scaler (HPA or ScaledObject) -> VA
-			// Load Job, Service, Deployment, and ServiceMonitor cleanup is handled by DeferCleanup registered in BeforeAll and test
 
+			serviceName := names.Service
+			serviceMonitorName := names.ServiceMonitor
+
+			// Delete ServiceMonitor
+			cleanupResource(ctx, "ServiceMonitor", cfg.MonitoringNS, serviceMonitorName,
+				func() error {
+					return crClient.Delete(ctx, &promoperator.ServiceMonitor{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      serviceMonitorName,
+							Namespace: cfg.MonitoringNS,
+						},
+					})
+				},
+				func() bool {
+					err := crClient.Get(ctx, client.ObjectKey{Name: serviceMonitorName, Namespace: cfg.MonitoringNS}, &promoperator.ServiceMonitor{})
+					return errors.IsNotFound(err)
+				})
+
+			// Delete scaler (HPA or ScaledObject)
 			if cfg.ScalerBackend == scalerBackendKeda {
-				err := fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
-				Expect(err).NotTo(HaveOccurred())
+				cleanupResource(ctx, "ScaledObject", cfg.LLMDNamespace, names.ScaledObject,
+					func() error {
+						return fixtures.DeleteScaledObject(ctx, crClient, cfg.LLMDNamespace, hpaName)
+					},
+					func() bool {
+						so := &unstructured.Unstructured{}
+						so.SetAPIVersion("keda.sh/v1alpha1")
+						so.SetKind("ScaledObject")
+						err := crClient.Get(ctx, client.ObjectKey{Namespace: cfg.LLMDNamespace, Name: names.ScaledObject}, so)
+						return errors.IsNotFound(err)
+					})
 			} else {
 				hpaNameFull := hpaName + "-hpa"
 				cleanupResource(ctx, "HPA", cfg.LLMDNamespace, hpaNameFull,
@@ -322,18 +327,37 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			}
 
 			// Delete VA
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      vaName,
-					Namespace: cfg.LLMDNamespace,
-				},
-			}
-			cleanupResource(ctx, "VA", cfg.LLMDNamespace, vaName,
+			cleanupResource(ctx, "VariantAutoscaling", cfg.LLMDNamespace, vaName,
 				func() error {
-					return crClient.Delete(ctx, va)
+					return crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      vaName,
+							Namespace: cfg.LLMDNamespace,
+						},
+					})
 				},
 				func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, va)
+					err := crClient.Get(ctx, client.ObjectKey{Name: vaName, Namespace: cfg.LLMDNamespace}, &variantautoscalingv1alpha1.VariantAutoscaling{})
+					return errors.IsNotFound(err)
+				})
+
+			// Delete service
+			cleanupResource(ctx, "Service", cfg.LLMDNamespace, serviceName,
+				func() error {
+					return k8sClient.CoreV1().Services(cfg.LLMDNamespace).Delete(ctx, serviceName, metav1.DeleteOptions{})
+				},
+				func() bool {
+					_, err := k8sClient.CoreV1().Services(cfg.LLMDNamespace).Get(ctx, serviceName, metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				})
+
+			// Delete deployment
+			cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentName,
+				func() error {
+					return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentName, metav1.DeleteOptions{})
+				},
+				func() bool {
+					_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
 					return errors.IsNotFound(err)
 				})
 		})
@@ -1786,32 +1810,27 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 	Context("Error handling and graceful degradation", Label("smoke", "full"), Ordered, func() {
 		var (
-			errorTestPoolName         = "error-test-pool"
-			errorTestModelServiceName = "error-test-ms"
-			errorTestVAName           = "error-test-va"
+			names                     utils.TestResourceNames
+			errorTestPoolName         string
+			errorTestModelServiceName string
+			errorTestVAName           string
+			deploymentName            string
 		)
 
 		BeforeAll(func() {
-			By("Cleaning up any existing smoke test resources")
-			cleanupSmokeTestResources()
+			// Generate unique resource names for this test
+			names = utils.NewTestResourceNames("smoke", "error")
+			errorTestPoolName = names.Pool
+			errorTestModelServiceName = names.Base
+			errorTestVAName = names.VA
+			deploymentName = names.Deployment
 
-			deploymentName := errorTestModelServiceName + "-decode"
+			GinkgoWriter.Printf("Using unique resource names: pool=%s, model=%s, va=%s\n",
+				errorTestPoolName, errorTestModelServiceName, errorTestVAName)
 
 			By("Creating model service deployment for error handling tests")
-			err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, errorTestModelServiceName, errorTestPoolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+			err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, errorTestModelServiceName, errorTestPoolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
-
-			// Register cleanup for deployment
-			DeferCleanup(func() {
-				cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentName,
-					func() error {
-						return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentName, metav1.DeleteOptions{})
-					},
-					func() bool {
-						_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
-						return errors.IsNotFound(err)
-					})
-			})
 
 			By("Waiting for model service to be ready")
 			Eventually(func(g Gomega) {
@@ -1821,7 +1840,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			}, time.Duration(cfg.PodReadyTimeout)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
 
 			By("Creating VariantAutoscaling resource")
-			err = fixtures.EnsureVariantAutoscalingWithDefaults(
+			err = fixtures.CreateVariantAutoscalingWithDefaults(
 				ctx, crClient, cfg.LLMDNamespace, errorTestVAName,
 				deploymentName, cfg.ModelID, cfg.AcceleratorType,
 				cfg.ControllerInstance,
@@ -1842,25 +1861,34 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 
 		AfterAll(func() {
 			By("Cleaning up error handling test resources")
-			va := &variantautoscalingv1alpha1.VariantAutoscaling{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      errorTestVAName,
-					Namespace: cfg.LLMDNamespace,
-				},
-			}
-			cleanupResource(ctx, "VA", cfg.LLMDNamespace, errorTestVAName,
+
+			// Delete VA
+			cleanupResource(ctx, "VariantAutoscaling", cfg.LLMDNamespace, errorTestVAName,
 				func() error {
-					return crClient.Delete(ctx, va)
+					return crClient.Delete(ctx, &variantautoscalingv1alpha1.VariantAutoscaling{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      errorTestVAName,
+							Namespace: cfg.LLMDNamespace,
+						},
+					})
 				},
 				func() bool {
-					err := crClient.Get(ctx, client.ObjectKey{Name: errorTestVAName, Namespace: cfg.LLMDNamespace}, va)
+					err := crClient.Get(ctx, client.ObjectKey{Name: errorTestVAName, Namespace: cfg.LLMDNamespace}, &variantautoscalingv1alpha1.VariantAutoscaling{})
+					return errors.IsNotFound(err)
+				})
+
+			// Delete deployment
+			cleanupResource(ctx, "Deployment", cfg.LLMDNamespace, deploymentName,
+				func() error {
+					return k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Delete(ctx, deploymentName, metav1.DeleteOptions{})
+				},
+				func() bool {
+					_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
 					return errors.IsNotFound(err)
 				})
 		})
 
 		It("should handle deployment deletion gracefully", func() {
-			deploymentName := errorTestModelServiceName + "-decode"
-
 			By("Verifying deployment exists before deletion")
 			_, err := k8sClient.AppsV1().Deployments(cfg.LLMDNamespace).Get(ctx, deploymentName, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred(), "Deployment should exist before deletion")
@@ -1890,7 +1918,7 @@ var _ = Describe("Smoke Tests - Infrastructure Readiness", Label("smoke", "full"
 			// An explicit TargetResolved=False assertion on a permanently missing target is optional coverage.
 
 			By("Recreating the deployment")
-			err = fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace, errorTestModelServiceName, errorTestPoolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+			err = fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace, errorTestModelServiceName, errorTestPoolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 			Expect(err).NotTo(HaveOccurred(), "Failed to recreate model service")
 
 			By("Waiting for deployment to be created and progressing")

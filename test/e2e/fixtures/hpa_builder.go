@@ -40,7 +40,10 @@ func WithScaleTargetRefKind(kind string) HPAOption {
 	}
 }
 
-// CreateHPA creates a HorizontalPodAutoscaler for WVA integration. Fails if it already exists.
+// CreateHPA creates a HorizontalPodAutoscaler for WVA integration.
+//
+// Enforces single ownership: FAILS if HPA already exists. Use unique names for test isolation.
+// Clean up with DeleteHPA() in AfterEach.
 func CreateHPA(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
@@ -64,6 +67,9 @@ func DeleteHPA(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, 
 }
 
 // EnsureHPA creates or replaces the HPA (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateHPA() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureHPA(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,

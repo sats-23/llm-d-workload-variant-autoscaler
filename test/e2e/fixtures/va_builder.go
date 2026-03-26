@@ -48,7 +48,14 @@ func WithScaleTargetKind(kind string) VAOption {
 	}
 }
 
-// CreateVariantAutoscaling creates a VariantAutoscaling resource. Fails if it already exists.
+// CreateVariantAutoscaling creates a VariantAutoscaling resource.
+//
+// This function enforces single ownership: it will FAIL if a VA with the same name already exists.
+// Tests must use unique names (via utils.TestResourceName helpers) to avoid collisions.
+//
+// Use DeleteVariantAutoscaling() in AfterEach to clean up.
+//
+// For idempotent setup, use EnsureVariantAutoscaling(), but document why it's needed.
 func CreateVariantAutoscaling(
 	ctx context.Context,
 	crClient client.Client,
@@ -74,6 +81,10 @@ func DeleteVariantAutoscaling(ctx context.Context, crClient client.Client, names
 }
 
 // EnsureVariantAutoscaling creates or replaces the VariantAutoscaling (idempotent for test setup).
+//
+// WARNING: This implements delete-and-recreate semantics. PREFER CreateVariantAutoscaling()
+// with unique resource names for proper test isolation. See EnsureModelService() for details
+// on when Ensure* functions should be used.
 func EnsureVariantAutoscaling(
 	ctx context.Context,
 	crClient client.Client,

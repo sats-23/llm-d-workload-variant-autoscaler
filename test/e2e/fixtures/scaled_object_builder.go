@@ -38,7 +38,10 @@ func WithScaledObjectScaleTargetKind(kind string) ScaledObjectOption {
 	}
 }
 
-// CreateScaledObject creates a KEDA ScaledObject for WVA. Fails if it already exists.
+// CreateScaledObject creates a KEDA ScaledObject for WVA.
+//
+// Enforces single ownership: FAILS if ScaledObject already exists. Use unique names.
+// Clean up with DeleteScaledObject() in AfterEach.
 func CreateScaledObject(
 	ctx context.Context,
 	crClient client.Client,
@@ -71,6 +74,9 @@ func DeleteScaledObject(ctx context.Context, crClient client.Client, namespace, 
 }
 
 // EnsureScaledObject creates or replaces the ScaledObject (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateScaledObject() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureScaledObject(
 	ctx context.Context,
 	crClient client.Client,

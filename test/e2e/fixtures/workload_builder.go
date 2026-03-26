@@ -176,6 +176,9 @@ func DeleteBurstLoadJob(ctx context.Context, k8sClient *kubernetes.Clientset, na
 }
 
 // EnsureBurstLoadJob creates or replaces the burst load Job (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateBurstLoadJob() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureBurstLoadJob(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
@@ -449,7 +452,10 @@ exit 0
 	}
 }
 
-// CreateParallelLoadJobs creates multiple parallel load generation jobs. Fails if any job already exists.
+// CreateParallelLoadJobs creates multiple parallel load generation jobs.
+//
+// Enforces single ownership: FAILS if any job already exists. Use unique base names.
+// Clean up with DeleteParallelLoadJobs() in AfterEach.
 func CreateParallelLoadJobs(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,
@@ -469,6 +475,9 @@ func CreateParallelLoadJobs(
 }
 
 // EnsureParallelLoadJobs deletes existing parallel load jobs and creates them (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateParallelLoadJobs() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureParallelLoadJobs(
 	ctx context.Context,
 	k8sClient *kubernetes.Clientset,

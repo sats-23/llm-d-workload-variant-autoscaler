@@ -21,21 +21,30 @@ import (
 // scraping tests are skipped. In-cluster scraping tests still run to verify functionality.
 var _ = Describe("PodScrapingSource", Label("full"), Ordered, func() {
 	var (
-		poolName          = "pod-scraping-pool"
-		modelServiceName  = "pod-scraping-ms"
+		names             utils.TestResourceNames
+		poolName          string
+		modelServiceName  string
 		eppServiceName    string
 		metricsSecretName string
 	)
 
 	BeforeAll(func() {
+		// Generate unique resource names for this test
+		names = utils.NewTestResourceNames("pod-scraping", "basic")
+		poolName = names.Pool
+		modelServiceName = names.Base
+
+		GinkgoWriter.Printf("Using unique resource names: pool=%s, model=%s\n",
+			poolName, modelServiceName)
+
 		By("Creating model service to ensure EPP pods exist")
 		// EPP pods are created when a model service is deployed to an InferencePool
-		err := fixtures.EnsureModelService(ctx, k8sClient, cfg.LLMDNamespace,
+		err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace,
 			modelServiceName, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create model service")
 
 		By("Creating service to expose model server")
-		err = fixtures.EnsureService(ctx, k8sClient, cfg.LLMDNamespace,
+		err = fixtures.CreateService(ctx, k8sClient, cfg.LLMDNamespace,
 			modelServiceName, modelServiceName+"-decode", 8000)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create service")
 

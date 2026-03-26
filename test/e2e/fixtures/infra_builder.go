@@ -13,7 +13,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// CreateService creates a Kubernetes Service for the model server. Fails if the service already exists.
+// CreateService creates a Kubernetes Service for the model server.
+//
+// Enforces single ownership: FAILS if service already exists. Use unique names for test isolation.
+// Clean up with DeleteService() in AfterEach.
 func CreateService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, appLabel string, port int) error {
 	service := buildService(namespace, name, appLabel, port)
 	_, err := k8sClient.CoreV1().Services(namespace).Create(ctx, service, metav1.CreateOptions{})
@@ -31,6 +34,9 @@ func DeleteService(ctx context.Context, k8sClient *kubernetes.Clientset, namespa
 }
 
 // EnsureService creates or replaces the Service (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateService() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureService(ctx context.Context, k8sClient *kubernetes.Clientset, namespace, name, appLabel string, port int) error {
 	serviceName := name + "-service"
 	_, err := k8sClient.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
@@ -82,7 +88,10 @@ func buildService(namespace, name, appLabel string, port int) *corev1.Service {
 	}
 }
 
-// CreateServiceMonitor creates a ServiceMonitor for Prometheus. Fails if it already exists.
+// CreateServiceMonitor creates a ServiceMonitor for Prometheus.
+//
+// Enforces single ownership: FAILS if ServiceMonitor already exists. Use unique names.
+// Clean up with DeleteServiceMonitor() in AfterEach.
 func CreateServiceMonitor(ctx context.Context, crClient client.Client, monitoringNamespace, targetNamespace, name, appLabel string) error {
 	serviceMonitor := buildServiceMonitor(monitoringNamespace, targetNamespace, name, appLabel)
 	return crClient.Create(ctx, serviceMonitor)
@@ -102,6 +111,9 @@ func DeleteServiceMonitor(ctx context.Context, crClient client.Client, monitorin
 }
 
 // EnsureServiceMonitor creates or replaces the ServiceMonitor (idempotent for test setup).
+//
+// WARNING: Delete-and-recreate semantics. PREFER CreateServiceMonitor() with unique names.
+// See EnsureModelService() for when to use Ensure* functions.
 func EnsureServiceMonitor(ctx context.Context, crClient client.Client, monitoringNamespace, targetNamespace, name, appLabel string) error {
 	serviceMonitorName := name + "-monitor"
 	existingSM := &promoperator.ServiceMonitor{

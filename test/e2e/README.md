@@ -434,36 +434,123 @@ kubectl delete job -n llm-d-sim -l test-resource=true
 1. Create a new test file in `test/e2e/`
 2. Use fixtures from `test/e2e/fixtures/` to create resources
 3. Add appropriate Ginkgo labels (`smoke`, `full`, `flaky`)
-4. Ensure BeforeAll/AfterAll cleanup is implemented
-5. Update this README with test description
+4. **Use unique resource names** via `utils.TestResourceNames` helpers
+5. **Implement per-test cleanup** in `AfterEach` blocks
+6. Update this README with test description
 
-### Example Test Template
+### Test Isolation Guidelines
+
+**IMPORTANT:** To ensure proper test isolation and prevent cross-test dependencies:
+
+1. **Use Unique Names**: Always use `utils.TestResourceNames` helpers to generate unique resource names
+2. **Prefer Create* over Ensure***: Use `fixtures.Create*()` functions instead of `fixtures.Ensure*()`
+3. **Clean Up Per Test**: Implement `AfterEach` cleanup for test-specific resources
+4. **Document Ensure* Usage**: If you must use `Ensure*`, add a comment explaining why
+
+See [E2E Test Isolation Refactoring](../../docs/developer-guide/e2e-test-isolation-refactoring.md) for detailed guidelines.
+
+### Example Test Template (Recommended Pattern)
 
 ```go
-var _ = Describe("My New Test", Label("full"), Ordered, func() {
-    var (
-        poolName = "my-test-pool"
-        vaName   = "my-test-va"
-    )
+var _ = Describe("My New Test", Label("full"), func() {
+    var names utils.TestResourceNames
 
-    BeforeAll(func() {
-        // Create test resources using fixtures
-        err := fixtures.CreateInferencePool(ctx, crClient, cfg.LLMDNamespace, poolName, 8000)
-        Expect(err).NotTo(HaveOccurred())
-        // ... create more resources
+    BeforeEach(func() {
+        // Generate unique names for this test
+        names = utils.NewTestResourceNames("mysuite", "mytest")
     })
 
-    AfterAll(func() {
-        // Clean up test resources
-        _ = crClient.Delete(ctx, &v1alpha1.VariantAutoscaling{
-            ObjectMeta: metav1.ObjectMeta{Name: vaName, Namespace: cfg.LLMDNamespace},
-        })
+    AfterEach(func() {
+        By("Cleaning up test resources")
+        // Clean up in reverse order of creation
+        _ = fixtures.DeleteHPA(ctx, k8sClient, cfg.LLMDNamespace, names.Base)
+        _ = fixtures.DeleteVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, names.VA)
+        _ = fixtures.DeleteService(ctx, k8sClient, cfg.LLMDNamespace, names.Base)
+        _ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, names.Base)
+        _ = fixtures.DeleteServiceMonitor(ctx, crClient, cfg.MonitoringNS, names.Base)
     })
 
     It("should do something", func() {
-        // Test implementation
+        By("Creating model service with unique name")
+        err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace,
+            names.Base, poolName, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+        Expect(err).NotTo(HaveOccurred())
+
+        By("Creating service")
+        err = fixtures.CreateService(ctx, k8sClient, cfg.LLMDNamespace,
+            names.Base, names.Deployment, 8000)
+        Expect(err).NotTo(HaveOccurred())
+
+        By("Creating VariantAutoscaling")
+        err = fixtures.CreateVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace,
+            names.VA, names.Deployment, cfg.ModelID, "A100", 30.0, cfg.ControllerInstance)
+        Expect(err).NotTo(HaveOccurred())
+
+        // Test implementation...
     })
 })
+```
+
+### Example: Multi-Variant Test
+
+```go
+var _ = Describe("Multi-Variant Test", Label("full"), func() {
+    var (
+        namesA utils.TestResourceNames
+        namesB utils.TestResourceNames
+    )
+
+    BeforeEach(func() {
+        // Generate unique names for each variant
+        namesA = utils.NewTestResourceNamesWithVariant("saturation", "multi", "a")
+        namesB = utils.NewTestResourceNamesWithVariant("saturation", "multi", "b")
+    })
+
+    AfterEach(func() {
+        By("Cleaning up variant A resources")
+        _ = fixtures.DeleteVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, namesA.VA)
+        _ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, namesA.Base)
+        
+        By("Cleaning up variant B resources")
+        _ = fixtures.DeleteVariantAutoscaling(ctx, crClient, cfg.LLMDNamespace, namesB.VA)
+        _ = fixtures.DeleteModelService(ctx, k8sClient, cfg.LLMDNamespace, namesB.Base)
+    })
+
+    It("should scale variants independently", func() {
+        // Create variant A (cheaper)
+        err := fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace,
+            namesA.Base, poolA, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+        Expect(err).NotTo(HaveOccurred())
+
+        // Create variant B (more expensive)
+        err = fixtures.CreateModelService(ctx, k8sClient, cfg.LLMDNamespace,
+            namesB.Base, poolB, cfg.ModelID, cfg.UseSimulator, cfg.MaxNumSeqs)
+        Expect(err).NotTo(HaveOccurred())
+
+        // Test implementation...
+    })
+})
+```
+
+### Naming Utilities
+
+The `test/utils` package provides helpers for generating unique resource names:
+
+```go
+// Simple test with single resource set
+names := utils.NewTestResourceNames("smoke", "basic")
+// names.Base = "smoke-basic"
+// names.Deployment = "smoke-basic-decode"
+// names.Service = "smoke-basic-service"
+// names.VA = "smoke-basic-va"
+
+// Multi-variant test
+namesA := utils.NewTestResourceNamesWithVariant("saturation", "multi", "a")
+namesB := utils.NewTestResourceNamesWithVariant("saturation", "multi", "b")
+
+// Custom naming
+name := utils.TestResourceName("mysuite", "mytest", "model")
+// Returns: "mysuite-mytest-model"
 ```
 
 ## See Also
