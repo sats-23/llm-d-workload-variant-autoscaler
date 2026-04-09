@@ -453,7 +453,6 @@ func main() {
 		go engine.StartOptimizeLoop(ctx)
 		return nil
 	}))
-
 	if err != nil {
 		setupLog.Error(err, "unable to add optimization engine loop to manager")
 		os.Exit(1)

@@ -25,7 +25,6 @@ func NewModelAnalyzer(system *inferno.System) *ModelAnalyzer {
 func (ma *ModelAnalyzer) AnalyzeModel(ctx context.Context,
 	va llmdOptv1alpha1.VariantAutoscaling,
 ) *interfaces.ModelAnalyzeResponse {
-
 	serverName := utils.FullName(va.Name, va.Namespace)
 	if server, exists := ma.system.Servers()[serverName]; exists {
 		server.Calculate(ma.system.Accelerators())

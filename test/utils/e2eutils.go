@@ -492,7 +492,6 @@ func startPortForwarding(service *corev1.Service, namespace string, localPort, s
 
 // CreateLoadGeneratorJob creates and launches a Kubernetes Job for load generation using GuideLLM with the specified parameters
 func CreateLoadGeneratorJob(namespace, targetURL, modelName string, rate, maxSeconds, inputTokens, outputTokens int, k8sClient *kubernetes.Clientset, ctx context.Context) (*batchv1.Job, error) {
-
 	// Always use a standard python image and install guidellm at runtime
 	// using python:3.11 and installing cpu-only torch (~200MB) to be lightweight and fast
 	image := "registry.access.redhat.com/ubi9/python-311:9.7"
