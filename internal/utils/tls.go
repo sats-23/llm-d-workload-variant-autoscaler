@@ -71,8 +71,8 @@ func CreateTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	return config, nil
 }
 
-// ValidateTLSConfig validates TLS configuration.
-// Ensures HTTPS is used and certificate files exist when verification is enabled.
+// ValidateTLSConfig validates Prometheus transport configuration.
+// Ensures the URL scheme is supported and certificate files exist when HTTPS verification is enabled.
 func ValidateTLSConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
@@ -80,24 +80,37 @@ func ValidateTLSConfig(cfg *config.Config) error {
 
 	baseURL := cfg.PrometheusBaseURL()
 	insecureSkipVerify := cfg.PrometheusInsecureSkipVerify()
+	allowHTTP := cfg.PrometheusAllowHTTP()
 	caCertPath := cfg.PrometheusCACertPath()
 	clientCertPath := cfg.PrometheusClientCertPath()
 	clientKeyPath := cfg.PrometheusClientKeyPath()
 
-	// Validate that the URL uses HTTPS (TLS is always required)
 	u, err := url.Parse(baseURL)
-	if err != nil || u.Scheme != "https" {
-		return fmt.Errorf("HTTPS is required - URL must use https:// scheme: %s", baseURL)
+	if err != nil {
+		return fmt.Errorf("invalid Prometheus URL %q: %w", baseURL, err)
+	}
+
+	switch u.Scheme {
+	case "https":
+		// Continue with TLS-specific validation below.
+	case "http":
+		if !allowHTTP {
+			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
+		}
+		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", baseURL)
+		return nil
+	default:
+		return fmt.Errorf("unsupported Prometheus URL scheme %q in %q; expected http or https", u.Scheme, baseURL)
 	}
 
 	// If InsecureSkipVerify is true, we don't need to validate certificate files
-	// since we're intentionally skipping certificate verification
+	// since we're intentionally skipping certificate verification.
 	if insecureSkipVerify {
 		ctrl.Log.V(logging.VERBOSE).Info("TLS certificate verification is disabled - this is not recommended for production")
 		return nil
 	}
 
-	// Check if certificate files exist (only when not skipping verification)
+	// Check if certificate files exist (only when not skipping verification).
 	if caCertPath != "" {
 		if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
 			return fmt.Errorf("CA certificate file not found: %s", caCertPath)

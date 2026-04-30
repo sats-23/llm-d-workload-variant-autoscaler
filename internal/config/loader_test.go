@@ -314,6 +314,7 @@ PROMETHEUS_BASE_URL: "https://prometheus-file:9090"
 GLOBAL_OPT_INTERVAL: "120s"
 WVA_SCALE_TO_ZERO: "true"
 PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "true"
+PROMETHEUS_ALLOW_HTTP: "true"
 PROMETHEUS_CA_CERT_PATH: "/custom/ca.crt"
 `)
 
@@ -333,6 +334,9 @@ PROMETHEUS_CA_CERT_PATH: "/custom/ca.crt"
 	}
 	if !cfg.PrometheusInsecureSkipVerify() {
 		t.Error("Expected PrometheusInsecureSkipVerify to be true from file")
+	}
+	if !cfg.PrometheusAllowHTTP() {
+		t.Error("Expected PrometheusAllowHTTP to be true from file")
 	}
 	if cfg.PrometheusCACertPath() != "/custom/ca.crt" {
 		t.Errorf("Expected Prometheus CA cert path '/custom/ca.crt', got %q", cfg.PrometheusCACertPath())
@@ -411,6 +415,27 @@ func TestLoad_BoolPrecedence(t *testing.T) {
 			t.Errorf("Expected EnableLeaderElection=true (from file), got false")
 		}
 	})
+}
+
+func TestLoad_PrometheusAllowHTTPFromEnv(t *testing.T) {
+	_ = os.Setenv("PROMETHEUS_BASE_URL", "http://prometheus-env:9090")
+	_ = os.Setenv("PROMETHEUS_ALLOW_HTTP", "true")
+	defer func() {
+		_ = os.Unsetenv("PROMETHEUS_BASE_URL")
+		_ = os.Unsetenv("PROMETHEUS_ALLOW_HTTP")
+	}()
+
+	cfg, err := Load(nil, "")
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.PrometheusBaseURL() != "http://prometheus-env:9090" {
+		t.Errorf("Expected Prometheus BaseURL from env, got %q", cfg.PrometheusBaseURL())
+	}
+	if !cfg.PrometheusAllowHTTP() {
+		t.Error("Expected PrometheusAllowHTTP to be true from env")
+	}
 }
 
 // TestLoad_DurationPrecedence tests that duration flag precedence is correct: flag > env > file > defaults
