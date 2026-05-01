@@ -44,6 +44,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.OptimizationInterval() != 60*time.Second {
 		t.Errorf("Expected OptimizationInterval default 60s, got %v", cfg.OptimizationInterval())
 	}
+	if cfg.PrometheusAllowHTTP() {
+		t.Error("Expected PrometheusAllowHTTP default to be false")
+	}
 }
 
 func TestLoad_FlagsPrecedence(t *testing.T) {

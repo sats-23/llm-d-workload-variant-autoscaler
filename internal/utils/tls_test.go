@@ -162,6 +162,31 @@ func TestValidateTLSConfig(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "HTTP URL with TLS settings - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":     "http://prometheus:9090",
+				"PROMETHEUS_ALLOW_HTTP":   "true",
+				"PROMETHEUS_CA_CERT_PATH": "/tmp/ca.crt",
+			}),
+			expectError: true,
+		},
+		{
+			name: "HTTP URL with bearer token - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL":     "http://prometheus:9090",
+				"PROMETHEUS_ALLOW_HTTP":   "true",
+				"PROMETHEUS_BEARER_TOKEN": "secret",
+			}),
+			expectError: true,
+		},
+		{
+			name: "Unknown URL scheme - should fail",
+			promConfig: testConfigFromEnv(t, map[string]string{
+				"PROMETHEUS_BASE_URL": "ftp://prometheus:9090",
+			}),
+			expectError: true,
+		},
+		{
 			name: "TLS with insecure skip verify",
 			promConfig: testConfigFromEnv(t, map[string]string{
 				"PROMETHEUS_BASE_URL":                 "https://prometheus:9090",

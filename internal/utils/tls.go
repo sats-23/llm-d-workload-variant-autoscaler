@@ -14,8 +14,8 @@ import (
 	"github.com/llm-d/llm-d-workload-variant-autoscaler/internal/logging"
 )
 
-// CreateTLSConfig creates a TLS configuration from getter-based Prometheus config.
-// TLS is always enabled for HTTPS-only support. The configuration supports:
+// CreateTLSConfig creates a TLS configuration for HTTPS Prometheus endpoints.
+// The configuration supports:
 // - Server certificate validation via CA certificate
 // - Mutual TLS authentication via client certificates
 // - Insecure certificate verification (development/testing only)
@@ -96,6 +96,12 @@ func ValidateTLSConfig(cfg *config.Config) error {
 	case "http":
 		if !allowHTTP {
 			return fmt.Errorf("plain HTTP Prometheus URL %q is not allowed; set PROMETHEUS_ALLOW_HTTP=true to permit http:// endpoints", baseURL)
+		}
+		if cfg.PrometheusBearerToken() != "" || cfg.PrometheusTokenPath() != "" {
+			return fmt.Errorf("refusing to use bearer token authentication with plain HTTP Prometheus URL %q", baseURL)
+		}
+		if caCertPath != "" || clientCertPath != "" || clientKeyPath != "" || cfg.PrometheusServerName() != "" || insecureSkipVerify {
+			return fmt.Errorf("TLS settings are not supported with plain HTTP Prometheus URL %q; remove TLS-related configuration or use https://", baseURL)
 		}
 		ctrl.Log.Info("Plain HTTP Prometheus endpoint allowed by configuration", "address", baseURL)
 		return nil
